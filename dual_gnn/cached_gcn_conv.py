@@ -3,8 +3,19 @@ from torch.nn import Parameter
 from torch_scatter import scatter_add
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import add_remaining_self_loops
-
 from torch_geometric.nn.inits import glorot, zeros
+
+
+# 定义中间节点类
+class IntermediateNode:
+    def __init__(self):
+        self.av_results = {}
+
+    def store_av_result(self, cache_name, av):
+        self.av_results[cache_name] = av
+
+    def get_av_result(self, cache_name):
+        return self.av_results.get(cache_name)
 
 
 class CachedGCNConv(MessagePassing):
@@ -50,14 +61,6 @@ class CachedGCNConv(MessagePassing):
         self.improved = improved
         self.cache_dict = {}
 
-        # self.weight = Parameter(torch.Tensor(in_channels, out_channels))
-        #
-        # if bias:
-        #     self.bias = Parameter(torch.Tensor(out_channels))
-        # else:
-        #     self.register_parameter('bias', None)
-
-
         if weight is None:
             self.weight = Parameter(torch.Tensor(in_channels, out_channels).to(torch.float32))
             glorot(self.weight)
@@ -75,19 +78,11 @@ class CachedGCNConv(MessagePassing):
             self.bias = bias
             print("use shared bias")
 
-        # self.reset_parameters()
-
-    # def reset_parameters(self):
-    #     glorot(self.weight)
-    #     zeros(self.bias)
-        # self.cached_result = None
-        # self.cached_num_edges = None
-
     @staticmethod
     def norm(edge_index, num_nodes, edge_weight=None, improved=False,
              dtype=None):
         if edge_weight is None:
-            edge_weight = torch.ones((edge_index.size(1), ), dtype=dtype,
+            edge_weight = torch.ones((edge_index.size(1),), dtype=dtype,
                                      device=edge_index.device)
 
         fill_value = 1 if not improved else 2
@@ -101,7 +96,7 @@ class CachedGCNConv(MessagePassing):
 
         return edge_index, deg_inv_sqrt[row] * edge_weight * deg_inv_sqrt[col]
 
-    def forward(self, x, edge_index, cache_name="default_cache", edge_weight=None):
+    def forward(self, x, edge_index, cache_name="default_cache", edge_weight=None, intermediate_node=None):
         """"""
 
         x = torch.matmul(x, self.weight)
@@ -113,8 +108,14 @@ class CachedGCNConv(MessagePassing):
         else:
             edge_index, norm = self.cache_dict[cache_name]
 
+        # 计算av
+        av = self.propagate(edge_index, x=x, norm=norm)
 
-        return self.propagate(edge_index, x=x, norm=norm)
+        # 存储av到中间节点
+        if intermediate_node is not None:
+            intermediate_node.store_av_result(cache_name, av)
+
+        return av
 
     def message(self, x_j, norm):
         return norm.view(-1, 1) * x_j
