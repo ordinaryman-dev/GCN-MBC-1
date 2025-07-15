@@ -3,7 +3,7 @@ import os
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 from argparse import ArgumentParser
-from dual_gnn.cached_gcn_conv import CachedGCNConv, IntermediateNode
+from dual_gnn.cached_gcn_conv import CachedGCNConv
 from dual_gnn.dataset.DomainData import DomainData
 import random
 import numpy as np
@@ -52,22 +52,12 @@ class GNN(torch.nn.Module):
             CachedGCNConv(128, encoder_dim, **kwargs)
         ])
 
-        self.intermediate_node = IntermediateNode()
-
     def forward(self, x, edge_index, cache_name):
-        # 第一层卷积
-        x = self.conv_layers[0](x, edge_index, cache_name, intermediate_node=self.intermediate_node)
-        x = F.relu(x)
-        x = self.dropout_layers[0](x)
-
-        # 从中间节点获取av结果
-        av = self.intermediate_node.get_av_result(cache_name)
-
-        # 第二层卷积使用中间节点的av结果
-        x = self.conv_layers[1](av, edge_index, cache_name)
-        if len(self.conv_layers) > 1:
-            x = F.relu(x)
-            x = self.dropout_layers[1](x)
+        for i, conv_layer in enumerate(self.conv_layers):
+            x = conv_layer(x, edge_index, cache_name)
+            if i < len(self.conv_layers) - 1:
+                x = F.relu(x)
+                x = self.dropout_layers[i](x)
         return x
 
 
