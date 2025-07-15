@@ -3,8 +3,10 @@ from torch.nn import Parameter
 from torch_scatter import scatter_add
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import add_remaining_self_loops
-
 from torch_geometric.nn.inits import glorot, zeros
+from torch_geometric.data import Data
+# 使用相对导入
+from .MBC import Iterative_MBC
 
 
 class CachedGCNConv(MessagePassing):
@@ -49,14 +51,7 @@ class CachedGCNConv(MessagePassing):
         self.out_channels = out_channels
         self.improved = improved
         self.cache_dict = {}
-
-        # self.weight = Parameter(torch.Tensor(in_channels, out_channels))
-        #
-        # if bias:
-        #     self.bias = Parameter(torch.Tensor(out_channels))
-        # else:
-        #     self.register_parameter('bias', None)
-
+        self.intermediate_nodes = {}
 
         if weight is None:
             self.weight = Parameter(torch.Tensor(in_channels, out_channels).to(torch.float32))
@@ -74,14 +69,6 @@ class CachedGCNConv(MessagePassing):
         else:
             self.bias = bias
             print("use shared bias")
-
-        # self.reset_parameters()
-
-    # def reset_parameters(self):
-    #     glorot(self.weight)
-    #     zeros(self.bias)
-        # self.cached_result = None
-        # self.cached_num_edges = None
 
     @staticmethod
     def norm(edge_index, num_nodes, edge_weight=None, improved=False,
@@ -101,10 +88,12 @@ class CachedGCNConv(MessagePassing):
 
         return edge_index, deg_inv_sqrt[row] * edge_weight * deg_inv_sqrt[col]
 
-    def forward(self, x, edge_index, cache_name="default_cache", edge_weight=None):
-        """"""
+    def forward(self, x, edge_index, cache_name="default_cache", edge_weight=None, tau_U=2, tau_V=2):
+        left_nodes, right_nodes = Iterative_MBC(Data(edge_index=edge_index, num_nodes=x.size(0)), tau_U, tau_V)
 
-        x = torch.matmul(x, self.weight)
+        # 计算邻接矩阵结果并存储在中间节点中
+        adj_matrix_result = torch.matmul(x[left_nodes], self.weight)
+        self.intermediate_nodes[cache_name] = adj_matrix_result
 
         if not cache_name in self.cache_dict:
             edge_index, norm = self.norm(edge_index, x.size(0), edge_weight,
@@ -112,7 +101,6 @@ class CachedGCNConv(MessagePassing):
             self.cache_dict[cache_name] = edge_index, norm
         else:
             edge_index, norm = self.cache_dict[cache_name]
-
 
         return self.propagate(edge_index, x=x, norm=norm)
 
