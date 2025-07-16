@@ -1,13 +1,28 @@
+# dual_gnn/cached_gcn_conv.py
 import torch
 from torch.nn import Parameter
 from torch_scatter import scatter_add
 from torch_geometric.nn.conv import MessagePassing
 from torch_geometric.utils import add_remaining_self_loops
 from torch_geometric.nn.inits import glorot, zeros
-from torch_geometric.data import Data
-# 使用相对导入
-from .MBC import Iterative_MBC
 
+# 定义中间节点类
+class IntermediateNode:
+    def __init__(self):
+        self.av_results = {}
+        self.biclique_av_results = {}  # 新增：用于存储二分团左部索引对应的邻接矩阵结果
+
+    def store_av_result(self, cache_name, av):
+        self.av_results[cache_name] = av
+
+    def get_av_result(self, cache_name):
+        return self.av_results.get(cache_name)
+
+    def store_biclique_av_result(self, cache_name, left_nodes, av):
+        self.biclique_av_results[(cache_name, tuple(left_nodes.tolist()))] = av
+
+    def get_biclique_av_result(self, cache_name, left_nodes):
+        return self.biclique_av_results.get((cache_name, tuple(left_nodes.tolist())))
 
 class CachedGCNConv(MessagePassing):
     r"""The graph convolutional operator from the `"Semi-supervised
@@ -51,7 +66,6 @@ class CachedGCNConv(MessagePassing):
         self.out_channels = out_channels
         self.improved = improved
         self.cache_dict = {}
-        self.intermediate_nodes = {}
 
         if weight is None:
             self.weight = Parameter(torch.Tensor(in_channels, out_channels).to(torch.float32))
@@ -74,7 +88,7 @@ class CachedGCNConv(MessagePassing):
     def norm(edge_index, num_nodes, edge_weight=None, improved=False,
              dtype=None):
         if edge_weight is None:
-            edge_weight = torch.ones((edge_index.size(1), ), dtype=dtype,
+            edge_weight = torch.ones((edge_index.size(1),), dtype=dtype,
                                      device=edge_index.device)
 
         fill_value = 1 if not improved else 2
@@ -88,12 +102,10 @@ class CachedGCNConv(MessagePassing):
 
         return edge_index, deg_inv_sqrt[row] * edge_weight * deg_inv_sqrt[col]
 
-    def forward(self, x, edge_index, cache_name="default_cache", edge_weight=None, tau_U=2, tau_V=2):
-        left_nodes, right_nodes = Iterative_MBC(Data(edge_index=edge_index, num_nodes=x.size(0)), tau_U, tau_V)
+    def forward(self, x, edge_index, cache_name="default_cache", edge_weight=None, intermediate_node=None, left_nodes=None):
+        """"""
 
-        # 计算邻接矩阵结果并存储在中间节点中
-        adj_matrix_result = torch.matmul(x[left_nodes], self.weight)
-        self.intermediate_nodes[cache_name] = adj_matrix_result
+        x = torch.matmul(x, self.weight)
 
         if not cache_name in self.cache_dict:
             edge_index, norm = self.norm(edge_index, x.size(0), edge_weight,
@@ -102,7 +114,16 @@ class CachedGCNConv(MessagePassing):
         else:
             edge_index, norm = self.cache_dict[cache_name]
 
-        return self.propagate(edge_index, x=x, norm=norm)
+        # 计算av
+        av = self.propagate(edge_index, x=x, norm=norm)
+
+        # 存储av到中间节点
+        if intermediate_node is not None:
+            intermediate_node.store_av_result(cache_name, av)
+            if left_nodes is not None:
+                intermediate_node.store_biclique_av_result(cache_name, left_nodes, av[left_nodes])
+
+        return av
 
     def message(self, x_j, norm):
         return norm.view(-1, 1) * x_j
