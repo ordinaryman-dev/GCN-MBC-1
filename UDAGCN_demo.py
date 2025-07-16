@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from MBC import Iterative_MBC  # 导入 Iterative_MBC 函数
+from torch_geometric.data import Data
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 parser = ArgumentParser()
